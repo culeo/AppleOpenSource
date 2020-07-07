@@ -13,7 +13,9 @@ import tarfile
 import shutil
 
 
-system_version = '1014'
+# system_version = '1014'
+system_version = '1015'
+
 base_url = 'https://opensource.apple.com'
 source_url = base_url + '/release/macos-'+system_version+'.html'
 save_path = os.getcwd() + '/'
@@ -120,6 +122,9 @@ def execute_cmd(cmd):
 
 
 def handle_pthread_machdep_file(path):
+    
+    if not os.path.exists(path): return
+
     data = ''
     with open(path, 'r+') as f:
         flag = 1;
@@ -137,6 +142,9 @@ def handle_pthread_machdep_file(path):
     
 
 def handle_dyld_priv_file(path):
+
+    if not os.path.exists(path): return
+
     data = ''
     with open(path, 'r+') as f:
         flag = 1;
@@ -152,7 +160,6 @@ def handle_dyld_priv_file(path):
     with open(path, 'w') as f:
         f.writelines(data)
 
-
 def run_main():
    
     response = requests.get(source_url).text
@@ -163,90 +170,206 @@ def run_main():
     downloader_file(downloader_url, path=save_path)
     objc4_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
 
-    # xnu
-    downloader_url = base_url + "/tarballs/xnu/xnu-4570.1.46.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    xnu_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
+    save_paths = {}
+    configs = get_configs()
 
-    # dyld_path
-    downloader_url = base_url + "/tarballs/dyld/dyld-519.2.1.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    dyld_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
+    # 下载
+    for key, path in configs["download_urls"].items():
+        download_url = base_url + path
+        downloader_file(download_url, path=save_path)
+        save_paths[key] = un_tar_gz(save_path + download_url.rsplit('/', 1)[-1])
 
-    # libplatform_path
-    downloader_url = base_url + "/tarballs/libplatform/libplatform-177.200.16.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    libplatform_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
+    print save_paths
 
-    # libc_path
-    downloader_url = base_url + "/tarballs/Libc/Libc-825.40.1.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    libc_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
-
-    # libpthread_path
-    downloader_url = base_url + "/tarballs/libpthread/libpthread-218.1.3.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    libpthread_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
-
-    # libclosure_path
-    downloader_url = base_url + "/tarballs/libclosure/libclosure-67.tar.gz"
-    downloader_file(downloader_url, path=save_path)
-    libclosure_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
- 
-    # 创建文件夹
     include_path = objc4_path + '/include'
-    sys_path = include_path + '/sys/'
-    system_path = include_path + '/System'
-    system_machine_path = include_path + '/System/machine/'
-    os_path = include_path + '/os'
-    mach_o_path = include_path + '/mach-o'
-    pthread_path = include_path + '/pthread'
+    execute_cmd("mkdir -p " + include_path)
 
-    for path in [include_path, system_path, sys_path, system_machine_path, os_path, mach_o_path, pthread_path]:
-        execute_cmd("mkdir -p " + path)
+    # 复制
+    for copy_file in configs["copy_files"]:
+        target_dir = include_path + copy_file["target"]
+        if not os.path.exists(target_dir):
+            execute_cmd("mkdir -p " + target_dir)
+        source_file = save_paths[copy_file["framework"]] + copy_file["source"]
+        execute_cmd("cp " + source_file + " " + target_dir)
 
-    # 复制文件
-    execute_cmd("find " + xnu_path + " -name \"reason.h\" | xargs -I{} cp {} " + sys_path)
-    execute_cmd("find " + xnu_path + " -name \"cpu_capabilities.h\" | grep machine | xargs -I{} cp {} " +
-                system_machine_path)
-    execute_cmd("find " + xnu_path + " -name \"tsd.h\" | grep os | xargs -I{} cp {} " + os_path)
+    for key, path in save_paths.items():
+            execute_cmd("rm -r " + path)
 
-    execute_cmd("find " + dyld_path + " -name \"dyld_priv.h\" | xargs -I{} cp {} " + mach_o_path)
-    execute_cmd("find " + dyld_path + " -name \"objc-shared-cache.h\" | xargs -I{} cp {} " + include_path)
+    if system_version == '1014':
+        # 拷贝 /runtime/isa.h 到include
+        execute_cmd("cp " + objc4_path + "/runtime/isa.h " + include_path)
+        # 删除 #include <objc\/objc-block-trampolines.h>
+        execute_cmd("sed -i '' 's/#include <objc\/objc-block-trampolines.h>//g' " + objc4_path +"/runtime/objc-block-trampolines.mm")
 
-    execute_cmd("find " + libplatform_path + " -name \"_simple.h\" | xargs -I{} cp {} " + include_path)
-    execute_cmd("find " + libplatform_path + " -name \"base_private.h\" | xargs -I{} cp {} " + os_path)
-    execute_cmd("find " + libplatform_path + " -name \"lock_private.h\" | xargs -I{} cp {} " + os_path)
+    # 修改源文件
+    handle_pthread_machdep_file(include_path + "/System/pthread_machdep.h")
+    handle_dyld_priv_file(include_path + "/mach-o/dyld_priv.h")
 
-    execute_cmd("find " + libc_path + " -name \"CrashReporterClient.h\" | xargs -I{} cp {} " + include_path)
-    execute_cmd("find " + libc_path + " -name \"pthread_machdep.h\" | xargs -I{} cp {} " + system_path)
-
-    execute_cmd("find " + libpthread_path + " -name \"tsd_private.h\" | xargs -I{} cp {} " + pthread_path)
-    execute_cmd("find " + libpthread_path + " -name \"spinlock_private.h\" | xargs -I{} cp {} " + pthread_path)
-  
-    execute_cmd("find " + libclosure_path + " -name \"Block_private.h\" | xargs -I{} cp {} " + include_path)
-
-    execute_cmd("sed -i '' 's/#include <objc\/objc-block-trampolines.h>//g' " + objc4_path +"/runtime/objc-block-trampolines.mm")
-
-    execute_cmd("rm -r " + xnu_path)
-    execute_cmd("rm -r " + dyld_path)
-    execute_cmd("rm -r " + libplatform_path)
-    execute_cmd("rm -r " + libc_path)
-    execute_cmd("rm -r " + libpthread_path)
-    execute_cmd("rm -r " + libclosure_path)
-
-    # 拷贝 /runtime/isa.h 到include
-    execute_cmd("find " + objc4_path + " -name \"isa.h\" | xargs -I{} cp {} " + include_path)
-
-    # 删除 #include <objc\/objc-block-trampolines.h>
-    execute_cmd("sed -i '' 's/#include <objc\/objc-block-trampolines.h>//g' " + objc4_path +"/runtime/objc-block-trampolines.mm")
     # 配置工程
     execute_cmd("ruby " + save_path + "config_objc4.rb " + objc4_path+"/objc.xcodeproj")
 
-    # 修改源文件
-    handle_pthread_machdep_file(system_path + "/pthread_machdep.h")
-    handle_dyld_priv_file(mach_o_path + "/dyld_priv.h")
 
+def configs_1014():
+    return {
+        "download_urls": {
+            "xnu": "/tarballs/xnu/xnu-4570.1.46.tar.gz",
+            "dyld": "/tarballs/dyld/dyld-519.2.1.tar.gz",
+            "libplatform": "/tarballs/libplatform/libplatform-177.200.16.tar.gz",
+            "libc": "/tarballs/Libc/Libc-825.40.1.tar.gz",
+            "libpthread": "/tarballs/libpthread/libpthread-218.1.3.tar.gz",
+            "libclosure": "/tarballs/libclosure/libclosure-67.tar.gz",
+        }, 
+        "copy_files": [
+            {
+                "framework": "xnu",
+                "source": "/bsd/sys/reason.h",
+                "target": "/sys/"
+            },
+            {
+                "framework": "xnu",
+                "source": "/osfmk/machine/cpu_capabilities.h",
+                "target": "/System/machine/"
+            },
+            {
+                "framework": "xnu",
+                "source": "/libsyscall/os/tsd.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "dyld",
+                "source": "/include/mach-o/dyld_priv.h",
+                "target": "/mach-o/"
+            },
+            {
+                "framework": "dyld",
+                "source": "/include/objc-shared-cache.h",
+                "target": "/"
+            },
+            {
+                "framework": "libplatform",
+                "source": "/private/_simple.h",
+                "target": "/"
+            },
+            {          
+                "framework": "libplatform",
+                "source": "/private/os/base_private.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "libplatform",
+                "source": "/private/os/lock_private.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "libc",
+                "source": "/include/CrashReporterClient.h",
+                "target": "/"
+            },
+            {
+                "framework": "libc",
+                "source": "/pthreads/pthread_machdep.h",
+                "target": "/System/"
+            },
+            {
+                "framework": "libpthread",
+                "source": "/private/tsd_private.h",
+                "target": "/pthread/"
+            },
+            {
+                "framework": "libpthread",
+                "source": "/private/spinlock_private.h",
+                "target": "/pthread/"
+            },
+            {
+                "framework": "libclosure",
+                "source": "/Block_private.h",
+                "target": "/"
+            }
+        ]
+    }
+
+def configs_1015():
+    return {
+        "download_urls": {
+            "xnu": "/tarballs/xnu/xnu-4903.241.1.tar.gz",
+            "dyld": "/tarballs/dyld/dyld-655.1.1.tar.gz",
+            "libplatform": "/tarballs/libplatform/libplatform-177.250.1.tar.gz",
+            "libc": "/tarballs/Libc/Libc-1722.250.1.tar.gz",
+            "libpthread": "/tarballs/libpthread/libpthread-330.250.2.tar.gz",
+            "libclosure": "/tarballs/libclosure/libclosure-73.tar.gz",
+        }, 
+        "copy_files": [
+            {
+                "framework": "xnu",
+                "source": "/bsd/sys/reason.h",
+                "target": "/sys/"
+            },
+            {
+                "framework": "xnu",
+                "source": "/osfmk/machine/cpu_capabilities.h",
+                "target": "/System/machine/"
+            },
+            {
+                "framework": "xnu",
+                "source": "/libsyscall/os/tsd.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "dyld",
+                "source": "/include/mach-o/dyld_priv.h",
+                "target": "/mach-o/"
+            },
+            {
+                "framework": "dyld",
+                "source": "/include/objc-shared-cache.h",
+                "target": "/"
+            },
+            {
+                "framework": "libplatform",
+                "source": "/private/_simple.h",
+                "target": "/"
+            },
+            {          
+                "framework": "libplatform",
+                "source": "/private/os/base_private.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "libplatform",
+                "source": "/private/os/lock_private.h",
+                "target": "/os/"
+            },
+            {
+                "framework": "libc",
+                "source": "/include/CrashReporterClient.h",
+                "target": "/"
+            },
+            {
+                "framework": "libc",
+                "source": "/pthreads/pthread_machdep.h",
+                "target": "/System/"
+            },
+            {
+                "framework": "libpthread",
+                "source": "/private/tsd_private.h",
+                "target": "/pthread/"
+            },
+            {
+                "framework": "libpthread",
+                "source": "/private/spinlock_private.h",
+                "target": "/pthread/"
+            },
+            {
+                "framework": "libclosure",
+                "source": "/Block_private.h",
+                "target": "/"
+            }
+        ]
+    }
+
+def get_configs():
+    if system_version == '1015': return configs_1015()
+    return configs_1014()
 
 if __name__ == '__main__':
     run_main()

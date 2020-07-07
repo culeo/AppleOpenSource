@@ -20,6 +20,9 @@ end
 target = project.targets[0]
 target.build_configurations.each do |config|
 
+    # 修改 MACOSX_DEPLOYMENT_TARGET
+    config.build_settings["MACOSX_DEPLOYMENT_TARGET"] = "10.14"
+
     # 导入include头文件
     config.build_settings["SYSTEM_HEADER_SEARCH_PATHS"] = "${SRCROOT}/include"
 

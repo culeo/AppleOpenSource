@@ -11,15 +11,7 @@ import requests
 import gzip
 import tarfile
 import shutil
-
-
-# system_version = '1014'
-system_version = '1015'
-
-base_url = 'https://opensource.apple.com'
-source_url = base_url + '/release/macos-'+system_version+'.html'
-save_path = os.getcwd() + '/'
-
+import re
 
 class DownloadThread(threading.Thread):
     """
@@ -139,7 +131,6 @@ def handle_pthread_machdep_file(path):
 
     with open(path, 'w') as f:
         f.writelines(data)
-    
 
 def handle_dyld_priv_file(path):
 
@@ -160,8 +151,42 @@ def handle_dyld_priv_file(path):
     with open(path, 'w') as f:
         f.writelines(data)
 
-def run_main():
+def handle_objc_runtime_file(path):
+
+    if not os.path.exists(path): return
+
+    data = ''
+    with open(path, 'r+') as f:
+        for line in f.readlines():
+            if (line.find("#error mismatch in debug-ness macros") == -1):
+                data += line
+
+    with open(path, 'w') as f:
+        f.writelines(data)
+
+def delete_bridgeos_for_file(path):
+
+    if not os.path.exists(path): return
+
+    data = ''
+    with open(path, 'r+') as f:
+        data = f.read()
+
+    pattern = re.compile(r'(, bridgeos\([0-9.]*\))')
+    pattern.findall(data)
+
+    out = re.sub(pattern, "", data)
+
+    with open(path, 'w') as f:
+        f.writelines(out)
+
+def run_main(version):
    
+    save_path = os.getcwd() + '/'
+
+    base_url = 'https://opensource.apple.com'
+    source_url = base_url + '/release/macos-' + version + '.html'
+
     response = requests.get(source_url).text
     html = etree.HTML(response)
 
@@ -171,7 +196,7 @@ def run_main():
     objc4_path = un_tar_gz(save_path + downloader_url.rsplit('/', 1)[-1])
 
     save_paths = {}
-    configs = get_configs()
+    configs = get_configs(version)
 
     # 下载
     for key, path in configs["download_urls"].items():
@@ -195,7 +220,7 @@ def run_main():
     for key, path in save_paths.items():
             execute_cmd("rm -r " + path)
 
-    if system_version == '1014':
+    if version == '1014':
         # 拷贝 /runtime/isa.h 到include
         execute_cmd("cp " + objc4_path + "/runtime/isa.h " + include_path)
         # 删除 #include <objc\/objc-block-trampolines.h>
@@ -204,6 +229,9 @@ def run_main():
     # 修改源文件
     handle_pthread_machdep_file(include_path + "/System/pthread_machdep.h")
     handle_dyld_priv_file(include_path + "/mach-o/dyld_priv.h")
+    handle_objc_runtime_file(objc4_path + "/runtime/objc-runtime.mm")
+    delete_bridgeos_for_file(include_path + "/mach-o/dyld_priv.h")
+    delete_bridgeos_for_file(include_path + "/os/lock_private.h")
 
     # 配置工程
     execute_cmd("ruby " + save_path + "config_objc4.rb " + objc4_path+"/objc.xcodeproj")
@@ -291,10 +319,10 @@ def configs_1014():
 def configs_1015():
     return {
         "download_urls": {
-            "xnu": "/tarballs/xnu/xnu-4903.241.1.tar.gz",
-            "dyld": "/tarballs/dyld/dyld-655.1.1.tar.gz",
-            "libplatform": "/tarballs/libplatform/libplatform-177.250.1.tar.gz",
-            "libc": "/tarballs/Libc/Libc-1722.250.1.tar.gz",
+            "xnu": "/tarballs/xnu/xnu-6153.11.26.tar.gz",
+            "dyld": "/tarballs/dyld/dyld-732.8.tar.gz",
+            "libplatform": "/tarballs/libplatform/libplatform-220.tar.gz",
+            "libc": "/tarballs/Libc/Libc-825.40.1.tar.gz",
             "libpthread": "/tarballs/libpthread/libpthread-330.250.2.tar.gz",
             "libclosure": "/tarballs/libclosure/libclosure-73.tar.gz",
         }, 
@@ -313,6 +341,11 @@ def configs_1015():
                 "framework": "xnu",
                 "source": "/libsyscall/os/tsd.h",
                 "target": "/os/"
+            },
+            {
+                "framework": "xnu",
+                "source": "/osfmk/kern/restartable.h",
+                "target": "/kern/"
             },
             {
                 "framework": "dyld",
@@ -367,10 +400,18 @@ def configs_1015():
         ]
     }
 
-def get_configs():
-    if system_version == '1015': return configs_1015()
+def get_configs(version):
+    if version == '1015': return configs_1015()
     return configs_1014()
 
 if __name__ == '__main__':
-    run_main()
+
+    if len(sys.argv) < 2:
+        print "请选择版本 macosx 版本号(可用版本 1014，1015)"
+        exit()
+
+    version = sys.argv[1]
+
+    run_main(version)
+
     print "构建完成"
